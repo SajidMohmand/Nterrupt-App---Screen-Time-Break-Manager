@@ -11,12 +11,16 @@ import androidx.core.app.NotificationManagerCompat
 class NterruptForegroundService : Service() {
     
     private var foregroundCheckTimer: java.util.Timer? = null
-    private val blockedApps = mutableMapOf<String, BlockedAppInfo>()
+    
+    // Persistent blocking map: packageName → expiryTimestamp
+    private val blockedAppsMap = mutableMapOf<String, Long>()
+    
+    // Additional info for blocked apps
+    private val blockedAppsInfo = mutableMapOf<String, BlockedAppInfo>()
     
     data class BlockedAppInfo(
         val appName: String,
         val packageName: String,
-        val blockEndTime: Long,
         val blockId: String
     )
     
@@ -231,20 +235,33 @@ class NterruptForegroundService : Service() {
     }
     
     private fun startAppBlock(appName: String, packageName: String, durationMs: Long) {
-        val blockEndTime = System.currentTimeMillis() + durationMs
-        val blockId = "${packageName}_${System.currentTimeMillis()}"
+        val currentTime = System.currentTimeMillis()
+        val expiryTimestamp = currentTime + durationMs
+        val blockId = "${packageName}_${currentTime}"
         
-        val blockInfo = BlockedAppInfo(appName, packageName, blockEndTime, blockId)
-        blockedApps[packageName] = blockInfo
+        // Set expiry time in persistent map
+        blockedAppsMap[packageName] = expiryTimestamp
         
-        android.util.Log.d("NterruptService", "Started blocking $appName for ${durationMs}ms")
+        // Store additional info
+        val blockInfo = BlockedAppInfo(appName, packageName, blockId)
+        blockedAppsInfo[packageName] = blockInfo
+        
+        android.util.Log.d("NterruptService", "Started blocking $appName until timestamp: $expiryTimestamp (${durationMs}ms from now)")
+        
+        // Immediately check if we need to show overlay
+        checkAndShowOverlayIfNeeded(packageName)
         
         // Update notification to show active blocks
         updateNotificationWithBlocks()
     }
     
     private fun endAppBlock(packageName: String) {
-        blockedApps.remove(packageName)
+        blockedAppsMap.remove(packageName)
+        blockedAppsInfo.remove(packageName)
+        
+        // Clear overlay state for this package
+        FullScreenOverlayActivity.clearOverlayStateForPackage(packageName)
+        
         android.util.Log.d("NterruptService", "Ended blocking for $packageName")
         
         // Update notification
@@ -253,14 +270,10 @@ class NterruptForegroundService : Service() {
     
     private fun handleBlockEnded(blockId: String) {
         // Find and remove the block with this ID
-        val packageToRemove = blockedApps.entries.find { it.value.blockId == blockId }?.key
+        val packageToRemove = blockedAppsInfo.entries.find { it.value.blockId == blockId }?.key
         packageToRemove?.let { 
-            blockedApps.remove(it)
-            android.util.Log.d("NterruptService", "Block ended for $it")
+            endAppBlock(it)
         }
-        
-        // Update notification
-        updateNotificationWithBlocks()
     }
     
     private fun startForegroundAppMonitoring() {
@@ -281,22 +294,44 @@ class NterruptForegroundService : Service() {
     
     private fun checkForegroundApp() {
         try {
+            // First, clean up any expired blocks
+            cleanupExpiredBlocks()
+            
             val currentApp = getCurrentForegroundApp()
-            if (currentApp != null && blockedApps.containsKey(currentApp)) {
-                val blockInfo = blockedApps[currentApp]!!
-                val currentTime = System.currentTimeMillis()
-                
-                if (currentTime < blockInfo.blockEndTime) {
-                    // App is still blocked, show overlay
-                    val remainingTime = blockInfo.blockEndTime - currentTime
-                    showBlockOverlay(blockInfo.appName, blockInfo.packageName, remainingTime, blockInfo.blockId)
-                } else {
-                    // Block time has expired, remove it
-                    endAppBlock(currentApp)
-                }
+            if (currentApp != null) {
+                checkAndShowOverlayIfNeeded(currentApp)
             }
         } catch (e: Exception) {
             android.util.Log.e("NterruptService", "Error checking foreground app", e)
+        }
+    }
+    
+    private fun checkAndShowOverlayIfNeeded(packageName: String) {
+        val expiryTimestamp = blockedAppsMap[packageName]
+        if (expiryTimestamp != null) {
+            val currentTime = System.currentTimeMillis()
+            
+            if (currentTime < expiryTimestamp) {
+                // App is still blocked, show overlay with remaining time
+                val blockInfo = blockedAppsInfo[packageName]
+                if (blockInfo != null) {
+                    showBlockOverlayWithExpiry(blockInfo.appName, packageName, expiryTimestamp)
+                }
+            } else {
+                // Block time has expired, remove it
+                endAppBlock(packageName)
+            }
+        }
+    }
+    
+    private fun cleanupExpiredBlocks() {
+        val currentTime = System.currentTimeMillis()
+        val expiredPackages = blockedAppsMap.filter { (_, expiryTimestamp) -> 
+            currentTime >= expiryTimestamp 
+        }.keys.toList()
+        
+        expiredPackages.forEach { packageName ->
+            endAppBlock(packageName)
         }
     }
     
@@ -323,10 +358,20 @@ class NterruptForegroundService : Service() {
         }
     }
     
-    private fun showBlockOverlay(appName: String, packageName: String, remainingTimeMs: Long, blockId: String) {
+    private fun showBlockOverlayWithExpiry(appName: String, packageName: String, expiryTimestamp: Long) {
         try {
-            // Use the new FullScreenOverlayActivity instead of BlockerOverlayActivity
-            FullScreenOverlayActivity.showOverlay(this, appName, packageName, remainingTimeMs)
+            // Calculate remaining time based on expiry timestamp
+            val currentTime = System.currentTimeMillis()
+            val remainingTimeMs = maxOf(0, expiryTimestamp - currentTime)
+            
+            if (remainingTimeMs > 0) {
+                // Show overlay with calculated remaining time
+                FullScreenOverlayActivity.showOverlayWithExpiry(this, appName, packageName, expiryTimestamp)
+                android.util.Log.d("NterruptService", "Showing overlay for $appName with ${remainingTimeMs}ms remaining")
+            } else {
+                // Time has expired, remove block
+                endAppBlock(packageName)
+            }
         } catch (e: Exception) {
             android.util.Log.e("NterruptService", "Error showing block overlay", e)
         }
@@ -347,9 +392,12 @@ class NterruptForegroundService : Service() {
     }
     
     private fun updateNotificationWithBlocks() {
-        val activeBlocks = blockedApps.size
+        // Clean up expired blocks first
+        cleanupExpiredBlocks()
+        
+        val activeBlocks = blockedAppsMap.size
         val notification = if (activeBlocks > 0) {
-            val blockedAppNames = blockedApps.values.joinToString(", ") { it.appName }
+            val blockedAppNames = blockedAppsInfo.values.joinToString(", ") { it.appName }
             createNotificationWithText("Blocking $activeBlocks app(s): $blockedAppNames")
         } else {
             createNotification()
@@ -392,9 +440,34 @@ class NterruptForegroundService : Service() {
         return builder.build()
     }
     
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        
+        // When the app is closed, check if any apps should still be blocked
+        android.util.Log.d("NterruptService", "App task removed - checking for active blocks")
+        
+        // Clean up expired blocks
+        cleanupExpiredBlocks()
+        
+        // If there are still active blocks, ensure the service continues running
+        if (blockedAppsMap.isNotEmpty()) {
+            android.util.Log.d("NterruptService", "Keeping service alive for ${blockedAppsMap.size} active blocks")
+            
+            // Check if we need to show overlay for currently foreground app
+            val currentApp = getCurrentForegroundApp()
+            if (currentApp != null) {
+                checkAndShowOverlayIfNeeded(currentApp)
+            }
+        }
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         stopForegroundAppMonitoring()
+        
+        // Clear all overlay states
+        FullScreenOverlayActivity.clearAllOverlayStates()
+        
         stopForeground(true)
     }
 }

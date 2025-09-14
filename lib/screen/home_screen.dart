@@ -10,6 +10,7 @@ import '../providers/app_list_provider.dart';
 import '../widgets/app_list_item.dart';
 import '../widgets/permission_request_dialog.dart';
 import '../screens/app_blocker_screen.dart';
+import '../examples/persistent_overlay_test.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -364,6 +365,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
+      floatingActionButton: PersistentOverlayTest.addTestButton(context),
     );
   }
 }

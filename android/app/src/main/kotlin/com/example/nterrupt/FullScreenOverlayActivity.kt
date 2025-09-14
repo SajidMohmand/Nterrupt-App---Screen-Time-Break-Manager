@@ -29,8 +29,7 @@ class FullScreenOverlayActivity : Activity() {
     private lateinit var appNameText: TextView
     private lateinit var messageText: TextView
     private lateinit var appIconView: ImageView
-    private var originalDurationMs: Long = 0
-    private var startTimeMs: Long = 0
+    private var expiryTimestamp: Long = 0
     
     private val dismissReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -43,42 +42,38 @@ class FullScreenOverlayActivity : Activity() {
     companion object {
         const val EXTRA_APP_NAME = "app_name"
         const val EXTRA_PACKAGE_NAME = "package_name"
-        const val EXTRA_DURATION_MS = "duration_ms"
-        const val EXTRA_START_TIME_MS = "start_time_ms"
+        const val EXTRA_EXPIRY_TIMESTAMP = "expiry_timestamp"
         
-        // Static variables to track overlay state
-        private var currentPackageName: String? = null
-        private var overlayStartTime: Long = 0L
-        private var overlayDuration: Long = 0L
+        // Static variables to track overlay state per package
+        private val packageOverlayStates = mutableMapOf<String, Long>() // packageName → expiryTimestamp
         
         fun showOverlay(context: Context, appName: String, packageName: String, durationMs: Long) {
             val currentTime = System.currentTimeMillis()
-            
-            // Check if overlay is already active for this package
-            if (currentPackageName == packageName && overlayStartTime > 0L) {
-                val elapsed = currentTime - overlayStartTime
-                if (elapsed < overlayDuration) {
-                    // Overlay is still active, bring to front with remaining time
-                    val remainingMs = overlayDuration - elapsed
-                    startOverlayActivity(context, appName, packageName, remainingMs, overlayStartTime)
-                    return
-                }
-            }
-            
-            // Start new overlay
-            overlayStartTime = currentTime
-            overlayDuration = durationMs
-            currentPackageName = packageName
-            
-            startOverlayActivity(context, appName, packageName, durationMs, currentTime)
+            val expiryTimestamp = currentTime + durationMs
+            showOverlayWithExpiry(context, appName, packageName, expiryTimestamp)
         }
         
-        private fun startOverlayActivity(context: Context, appName: String, packageName: String, durationMs: Long, startTimeMs: Long) {
+        fun showOverlayWithExpiry(context: Context, appName: String, packageName: String, expiryTimestamp: Long) {
+            val currentTime = System.currentTimeMillis()
+            
+            // Check if overlay is already active for this package
+            val existingExpiry = packageOverlayStates[packageName]
+            if (existingExpiry != null && currentTime < existingExpiry) {
+                // Overlay is still active, just bring to front
+                startOverlayActivity(context, appName, packageName, expiryTimestamp)
+                return
+            }
+            
+            // Update state and start new overlay
+            packageOverlayStates[packageName] = expiryTimestamp
+            startOverlayActivity(context, appName, packageName, expiryTimestamp)
+        }
+        
+        private fun startOverlayActivity(context: Context, appName: String, packageName: String, expiryTimestamp: Long) {
             val intent = Intent(context, FullScreenOverlayActivity::class.java).apply {
                 putExtra(EXTRA_APP_NAME, appName)
                 putExtra(EXTRA_PACKAGE_NAME, packageName)
-                putExtra(EXTRA_DURATION_MS, durationMs)
-                putExtra(EXTRA_START_TIME_MS, startTimeMs)
+                putExtra(EXTRA_EXPIRY_TIMESTAMP, expiryTimestamp)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -90,22 +85,23 @@ class FullScreenOverlayActivity : Activity() {
             context.startActivity(intent)
         }
         
-        fun clearOverlayState() {
-            currentPackageName = null
-            overlayStartTime = 0L
-            overlayDuration = 0L
+        fun clearOverlayStateForPackage(packageName: String) {
+            packageOverlayStates.remove(packageName)
+        }
+        
+        fun clearAllOverlayStates() {
+            packageOverlayStates.clear()
         }
         
         fun isOverlayActive(packageName: String): Boolean {
-            if (currentPackageName != packageName || overlayStartTime == 0L) return false
-            val elapsed = System.currentTimeMillis() - overlayStartTime
-            return elapsed < overlayDuration
+            val expiryTimestamp = packageOverlayStates[packageName] ?: return false
+            return System.currentTimeMillis() < expiryTimestamp
         }
         
         fun getRemainingTime(packageName: String): Long {
-            if (!isOverlayActive(packageName)) return 0
-            val elapsed = System.currentTimeMillis() - overlayStartTime
-            return overlayDuration - elapsed
+            val expiryTimestamp = packageOverlayStates[packageName] ?: return 0
+            val currentTime = System.currentTimeMillis()
+            return maxOf(0, expiryTimestamp - currentTime)
         }
     }
     
@@ -125,17 +121,15 @@ class FullScreenOverlayActivity : Activity() {
         // Get intent data
         val appName = intent.getStringExtra(EXTRA_APP_NAME) ?: "App"
         val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
-        originalDurationMs = intent.getLongExtra(EXTRA_DURATION_MS, 600000) // Default 10 minutes
-        startTimeMs = intent.getLongExtra(EXTRA_START_TIME_MS, System.currentTimeMillis())
+        expiryTimestamp = intent.getLongExtra(EXTRA_EXPIRY_TIMESTAMP, System.currentTimeMillis() + 600000) // Default 10 minutes from now
         
-        // Calculate remaining time
+        // Calculate remaining time based on expiry timestamp
         val currentTime = System.currentTimeMillis()
-        val elapsed = currentTime - startTimeMs
-        val remainingMs = maxOf(0, originalDurationMs - elapsed)
+        val remainingMs = maxOf(0, expiryTimestamp - currentTime)
         
-        if (remainingMs.toInt() <= 0) {
+        if (remainingMs <= 0) {
             // Time already expired, close overlay
-            clearOverlayState()
+            clearOverlayStateForPackage(packageName)
             finish()
             return
         }
@@ -289,7 +283,7 @@ class FullScreenOverlayActivity : Activity() {
         setContentView(mainLayout)
     }
     
-    private fun setupContent(appName: String, packageName: String, durationMs: Long) {
+    private fun setupContent(appName: String, packageName: String, remainingMs: Long) {
         // Set app name
         appNameText.text = "$appName is Blocked"
         
@@ -299,9 +293,9 @@ class FullScreenOverlayActivity : Activity() {
         // Load app icon
         loadAppIcon(packageName)
         
-        // Format initial countdown
-        val minutes = (durationMs / 1000) / 60
-        val seconds = (durationMs / 1000) % 60
+        // Format initial countdown based on remaining time
+        val minutes = (remainingMs / 1000) / 60
+        val seconds = (remainingMs / 1000) % 60
         countdownText.text = String.format("%02d:%02d", minutes, seconds)
     }
     
@@ -316,24 +310,35 @@ class FullScreenOverlayActivity : Activity() {
         }
     }
     
-    private fun startCountdown(durationMs: Long) {
+    private fun startCountdown(initialRemainingMs: Long) {
         countDownTimer?.cancel()
         
-        countDownTimer = object : CountDownTimer(durationMs, 1000) {
+        // Use a repeating timer that recalculates remaining time based on expiry timestamp
+        countDownTimer = object : CountDownTimer(initialRemainingMs + 1000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
-                val minutes = (millisUntilFinished / 1000) / 60
-                val seconds = (millisUntilFinished / 1000) % 60
+                // Recalculate remaining time based on expiry timestamp (not countdown)
+                val currentTime = System.currentTimeMillis()
+                val actualRemainingMs = maxOf(0, expiryTimestamp - currentTime)
+                
+                if (actualRemainingMs <= 0) {
+                    // Time has expired
+                    onFinish()
+                    return
+                }
+                
+                val minutes = (actualRemainingMs / 1000) / 60
+                val seconds = (actualRemainingMs / 1000) % 60
                 countdownText.text = String.format("%02d:%02d", minutes, seconds)
                 
                 // Update message based on time remaining
                 when {
-                    millisUntilFinished > 300000 -> { // > 5 minutes
+                    actualRemainingMs > 300000 -> { // > 5 minutes
                         messageText.text = "This app will be available again in:"
                     }
-                    millisUntilFinished > 60000 -> { // > 1 minute
+                    actualRemainingMs > 60000 -> { // > 1 minute
                         messageText.text = "Almost there! Just a little longer..."
                     }
-                    millisUntilFinished > 10000 -> { // > 10 seconds
+                    actualRemainingMs > 10000 -> { // > 10 seconds
                         messageText.text = "Getting ready to unlock..."
                     }
                     else -> {
@@ -342,12 +347,15 @@ class FullScreenOverlayActivity : Activity() {
                 }
                 
                 // Notify service that we're still active
-                notifyServiceCountdown(millisUntilFinished)
+                notifyServiceCountdown(actualRemainingMs)
             }
             
             override fun onFinish() {
                 // Countdown finished, clear state and close overlay
-                clearOverlayState()
+                val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
+                if (packageName.isNotEmpty()) {
+                    clearOverlayStateForPackage(packageName)
+                }
                 finish()
             }
         }
