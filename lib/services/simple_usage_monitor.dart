@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import '../models/app_info.dart';
 import 'preferences_service.dart';
-import 'overlay_service.dart';
+import 'overlay_blocking_service.dart';
 import 'app_discovery_service.dart';
 import 'foreground_service.dart';
 
@@ -176,15 +176,9 @@ class SimpleUsageMonitor {
     return true;
   }
   
-  /// Shows overlay for app in cooldown
+  /// Shows full-screen blocking overlay for app in cooldown
   static Future<void> _showCooldownOverlay(String packageName) async {
     try {
-      // Skip if overlay is already active to prevent crash
-      if (OverlayService.isOverlayActive) {
-        print('Overlay already active, skipping cooldown overlay for $packageName');
-        return;
-      }
-      
       // Get remaining cooldown time
       final remainingMinutes = getRemainingCooldown(packageName);
       if (remainingMinutes <= 0) {
@@ -199,14 +193,23 @@ class SimpleUsageMonitor {
         orElse: () => AppInfo(packageName: packageName, appName: packageName),
       );
       
-      // Show blocking overlay with safety check
-      await OverlayService.showLockOverlay(
+      // Check if overlay permission is granted
+      final hasPermission = await OverlayBlockingService.hasOverlayPermission();
+      if (!hasPermission) {
+        print('Overlay permission not granted, requesting permission');
+        await OverlayBlockingService.requestOverlayPermission();
+        return;
+      }
+      
+      // Show full-screen blocking overlay
+      final remainingDuration = Duration(minutes: remainingMinutes);
+      await OverlayBlockingService.showOverlay(
         appName: app.appName,
         packageName: packageName,
-        breakDurationMinutes: remainingMinutes,
+        duration: remainingDuration,
       );
       
-      print('Showing cooldown overlay for $packageName (${remainingMinutes} minutes remaining)');
+      print('Showing full-screen blocking overlay for $packageName (${remainingMinutes} minutes remaining)');
       
     } catch (e) {
       print('Error showing cooldown overlay: $e');
@@ -227,12 +230,6 @@ class SimpleUsageMonitor {
       _dailyUsageTimes[packageName] = 0;
       _lastResetTime[packageName] = DateTime.now();
       
-      // Skip overlay if already active to prevent crash
-      if (OverlayService.isOverlayActive) {
-        print('Overlay already active, skipping new overlay for $packageName');
-        return;
-      }
-      
       // Get app name for display
       final apps = await AppDiscoveryService.getInstalledApps();
       final app = apps.firstWhere(
@@ -240,15 +237,25 @@ class SimpleUsageMonitor {
         orElse: () => AppInfo(packageName: packageName, appName: packageName),
       );
       
-      // Show blocking overlay with error handling
+      // Show full-screen blocking overlay immediately
       try {
-        await OverlayService.showLockOverlay(
+        // Check if overlay permission is granted first
+        final hasPermission = await OverlayBlockingService.hasOverlayPermission();
+        if (!hasPermission) {
+          print('Overlay permission not granted, requesting permission');
+          await OverlayBlockingService.requestOverlayPermission();
+        }
+        
+        // Show the full-screen blocking overlay
+        await OverlayBlockingService.showOverlay(
           appName: app.appName,
           packageName: packageName,
-          breakDurationMinutes: _breakDurationMinutes,
+          duration: const Duration(minutes: _breakDurationMinutes),
         );
+        
+        print('Full-screen blocking overlay shown for $packageName');
       } catch (overlayError) {
-        print('Error showing overlay for $packageName: $overlayError');
+        print('Error showing full-screen overlay for $packageName: $overlayError');
         // Continue without overlay but keep cooldown active
       }
       

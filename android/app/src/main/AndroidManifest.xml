@@ -38,6 +38,28 @@
             </intent-filter>
         </activity>
 
+        <!-- Blocker Overlay Activity -->
+        <activity
+            android:name=".BlockerOverlayActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:noHistory="true" />
+
+        <!-- Full Screen Overlay Activity for True Blocking -->
+        <activity
+            android:name=".FullScreenOverlayActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+
         <!-- Nterrupt Foreground Service for app monitoring -->
         <service
             android:name=".NterruptForegroundService"

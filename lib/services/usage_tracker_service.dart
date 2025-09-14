@@ -3,7 +3,7 @@ import 'package:usage_stats/usage_stats.dart';
 import 'package:flutter/services.dart';
 import '../models/app_info.dart';
 import 'preferences_service.dart';
-import 'overlay_service.dart';
+import 'overlay_blocking_service.dart';
 
 /// Service for tracking app usage and enforcing limits
 class UsageTrackerService {
@@ -184,12 +184,25 @@ class UsageTrackerService {
       _dailyUsageTimes[packageName] = 0;
       _lastResetTime[packageName] = DateTime.now();
       
-      // Show blocking overlay
-      await OverlayService.showLockOverlay(
-        appName: app.appName,
-        packageName: packageName,
-        breakDurationMinutes: _breakDurationMinutes,
-      );
+      // Show full-screen blocking overlay
+      try {
+        // Check if overlay permission is granted first
+        final hasPermission = await OverlayBlockingService.hasOverlayPermission();
+        if (!hasPermission) {
+          print('Overlay permission not granted, requesting permission');
+          await OverlayBlockingService.requestOverlayPermission();
+        }
+        
+        // Show the full-screen blocking overlay
+        await OverlayBlockingService.showOverlay(
+          appName: app.appName,
+          packageName: packageName,
+          duration: Duration(minutes: _breakDurationMinutes),
+        );
+      } catch (overlayError) {
+        print('Error showing full-screen overlay for $packageName: $overlayError');
+        // Continue without overlay but keep cooldown active
+      }
       
       print('App $packageName blocked for $_breakDurationMinutes minutes');
       
@@ -201,17 +214,12 @@ class UsageTrackerService {
   /// Enforces cooldown by showing overlay if app is accessed during cooldown
   static Future<void> _enforceCooldown(String packageName) async {
     try {
-      // Check if overlay is already showing for this app
-      if (OverlayService.isOverlayActive) {
-        return;
-      }
-      
       // Get remaining cooldown time
       final cooldownEnd = _cooldownEndTimes[packageName]!;
       final now = DateTime.now();
-      final remainingMinutes = cooldownEnd.difference(now).inMinutes;
+      final remainingDuration = cooldownEnd.difference(now);
       
-      if (remainingMinutes > 0) {
+      if (remainingDuration.inMinutes > 0) {
         // Show overlay with remaining time
         final apps = await _getInstalledApps();
         final app = apps.firstWhere(
@@ -219,13 +227,18 @@ class UsageTrackerService {
           orElse: () => AppInfo(packageName: packageName, appName: packageName),
         );
         
-        await OverlayService.showLockOverlay(
-          appName: app.appName,
-          packageName: packageName,
-          breakDurationMinutes: remainingMinutes,
-        );
-        
-        print('Enforcing cooldown for $packageName: $remainingMinutes minutes remaining');
+        try {
+          // Show the full-screen blocking overlay with remaining time
+          await OverlayBlockingService.showOverlay(
+            appName: app.appName,
+            packageName: packageName,
+            duration: remainingDuration,
+          );
+          
+          print('Enforcing cooldown for $packageName: ${remainingDuration.inMinutes} minutes remaining');
+        } catch (overlayError) {
+          print('Error showing overlay during cooldown enforcement: $overlayError');
+        }
       }
       
     } catch (e) {

@@ -10,11 +10,25 @@ import androidx.core.app.NotificationManagerCompat
 
 class NterruptForegroundService : Service() {
     
+    private var foregroundCheckTimer: java.util.Timer? = null
+    private val blockedApps = mutableMapOf<String, BlockedAppInfo>()
+    
+    data class BlockedAppInfo(
+        val appName: String,
+        val packageName: String,
+        val blockEndTime: Long,
+        val blockId: String
+    )
+    
     companion object {
         const val CHANNEL_ID = "nterrupt_monitoring_channel"
         const val NOTIFICATION_ID = 1001
         const val ACTION_START_SERVICE = "START_SERVICE"
         const val ACTION_STOP_SERVICE = "STOP_SERVICE"
+        const val ACTION_BLOCK_APP = "BLOCK_APP"
+        const val ACTION_UNBLOCK_APP = "UNBLOCK_APP"
+        const val ACTION_BLOCK_ENDED = "BLOCK_ENDED"
+        const val ACTION_CHECK_FOREGROUND = "CHECK_FOREGROUND"
         
         fun startService(context: Context) {
             val intent = Intent(context, NterruptForegroundService::class.java)
@@ -31,6 +45,27 @@ class NterruptForegroundService : Service() {
             intent.action = ACTION_STOP_SERVICE
             context.startService(intent)
         }
+
+        fun blockApp(context: Context, appName: String, packageName: String, durationMs: Long) {
+            val intent = Intent(context, NterruptForegroundService::class.java)
+            intent.action = ACTION_BLOCK_APP
+            intent.putExtra("app_name", appName)
+            intent.putExtra("package_name", packageName)
+            // Explicitly ensure this is stored as Long
+            intent.putExtra("duration_ms", durationMs)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+        
+        fun unblockApp(context: Context, packageName: String) {
+            val intent = Intent(context, NterruptForegroundService::class.java)
+            intent.action = ACTION_UNBLOCK_APP
+            intent.putExtra("package_name", packageName)
+            context.startService(intent)
+        }
     }
     
     override fun onCreate() {
@@ -45,6 +80,7 @@ class NterruptForegroundService : Service() {
                     // Ensure notification channel is created before starting foreground
                     createNotificationChannel()
                     startForegroundService()
+                    startForegroundAppMonitoring()
                 } catch (e: Exception) {
                     // Log error and stop service if we can't start foreground
                     android.util.Log.e("NterruptService", "Failed to start foreground service", e)
@@ -53,12 +89,39 @@ class NterruptForegroundService : Service() {
             }
             ACTION_STOP_SERVICE -> {
                 try {
+                    stopForegroundAppMonitoring()
                     stopForeground(true)
                     stopSelf()
                 } catch (e: Exception) {
                     android.util.Log.e("NterruptService", "Error stopping service", e)
                     stopSelf()
                 }
+            }
+            ACTION_BLOCK_APP -> {
+                val appName = intent?.getStringExtra("app_name") ?: "App"
+                val packageName = intent?.getStringExtra("package_name") ?: ""
+                val durationMs = intent?.getLongExtra("duration_ms", 0) ?: 0
+
+                if (packageName.isNotEmpty() && durationMs > 0) {
+                    startAppBlock(appName, packageName, durationMs)
+                }
+            }
+            ACTION_UNBLOCK_APP -> {
+                val packageName = intent?.getStringExtra("package_name") ?: ""
+                if (packageName.isNotEmpty()) {
+                    endAppBlock(packageName)
+                }
+            }
+            ACTION_BLOCK_ENDED -> {
+                val blockId = intent?.getStringExtra("block_id") ?: ""
+                handleBlockEnded(blockId)
+            }
+            ACTION_CHECK_FOREGROUND -> {
+                checkForegroundApp()
+            }
+            "UPDATE_COUNTDOWN" -> {
+                val remainingMs = intent?.getLongExtra("remaining_ms", 0) ?: 0
+                updateCountdownNotification(remainingMs)
             }
         }
         return START_STICKY
@@ -167,8 +230,171 @@ class NterruptForegroundService : Service() {
         }
     }
     
+    private fun startAppBlock(appName: String, packageName: String, durationMs: Long) {
+        val blockEndTime = System.currentTimeMillis() + durationMs
+        val blockId = "${packageName}_${System.currentTimeMillis()}"
+        
+        val blockInfo = BlockedAppInfo(appName, packageName, blockEndTime, blockId)
+        blockedApps[packageName] = blockInfo
+        
+        android.util.Log.d("NterruptService", "Started blocking $appName for ${durationMs}ms")
+        
+        // Update notification to show active blocks
+        updateNotificationWithBlocks()
+    }
+    
+    private fun endAppBlock(packageName: String) {
+        blockedApps.remove(packageName)
+        android.util.Log.d("NterruptService", "Ended blocking for $packageName")
+        
+        // Update notification
+        updateNotificationWithBlocks()
+    }
+    
+    private fun handleBlockEnded(blockId: String) {
+        // Find and remove the block with this ID
+        val packageToRemove = blockedApps.entries.find { it.value.blockId == blockId }?.key
+        packageToRemove?.let { 
+            blockedApps.remove(it)
+            android.util.Log.d("NterruptService", "Block ended for $it")
+        }
+        
+        // Update notification
+        updateNotificationWithBlocks()
+    }
+    
+    private fun startForegroundAppMonitoring() {
+        // Start timer to check foreground app every 2 seconds
+        foregroundCheckTimer?.cancel()
+        foregroundCheckTimer = java.util.Timer()
+        foregroundCheckTimer?.scheduleAtFixedRate(object : java.util.TimerTask() {
+            override fun run() {
+                checkForegroundApp()
+            }
+        }, 0, 2000) // Check every 2 seconds
+    }
+    
+    private fun stopForegroundAppMonitoring() {
+        foregroundCheckTimer?.cancel()
+        foregroundCheckTimer = null
+    }
+    
+    private fun checkForegroundApp() {
+        try {
+            val currentApp = getCurrentForegroundApp()
+            if (currentApp != null && blockedApps.containsKey(currentApp)) {
+                val blockInfo = blockedApps[currentApp]!!
+                val currentTime = System.currentTimeMillis()
+                
+                if (currentTime < blockInfo.blockEndTime) {
+                    // App is still blocked, show overlay
+                    val remainingTime = blockInfo.blockEndTime - currentTime
+                    showBlockOverlay(blockInfo.appName, blockInfo.packageName, remainingTime, blockInfo.blockId)
+                } else {
+                    // Block time has expired, remove it
+                    endAppBlock(currentApp)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NterruptService", "Error checking foreground app", e)
+        }
+    }
+    
+    private fun getCurrentForegroundApp(): String? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            val time = System.currentTimeMillis()
+            val stats = usageStatsManager.queryUsageStats(
+                android.app.usage.UsageStatsManager.INTERVAL_DAILY,
+                time - 1000 * 60,
+                time
+            )
+            
+            var mostRecentStats: android.app.usage.UsageStats? = null
+            for (usageStats in stats) {
+                if (mostRecentStats == null || usageStats.lastTimeUsed > mostRecentStats.lastTimeUsed) {
+                    mostRecentStats = usageStats
+                }
+            }
+            
+            mostRecentStats?.packageName
+        } else {
+            null
+        }
+    }
+    
+    private fun showBlockOverlay(appName: String, packageName: String, remainingTimeMs: Long, blockId: String) {
+        try {
+            // Use the new FullScreenOverlayActivity instead of BlockerOverlayActivity
+            FullScreenOverlayActivity.showOverlay(this, appName, packageName, remainingTimeMs)
+        } catch (e: Exception) {
+            android.util.Log.e("NterruptService", "Error showing block overlay", e)
+        }
+    }
+    
+    private fun updateCountdownNotification(remainingMs: Long) {
+        try {
+            val minutes = (remainingMs / 1000) / 60
+            val seconds = (remainingMs / 1000) % 60
+            val countdownText = String.format("Countdown: %02d:%02d", minutes, seconds)
+            
+            val notification = createNotificationWithText("App blocking active - $countdownText")
+            val notificationManager = NotificationManagerCompat.from(this)
+            notificationManager.notify(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            android.util.Log.e("NterruptService", "Error updating countdown notification", e)
+        }
+    }
+    
+    private fun updateNotificationWithBlocks() {
+        val activeBlocks = blockedApps.size
+        val notification = if (activeBlocks > 0) {
+            val blockedAppNames = blockedApps.values.joinToString(", ") { it.appName }
+            createNotificationWithText("Blocking $activeBlocks app(s): $blockedAppNames")
+        } else {
+            createNotification()
+        }
+        
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+    
+    private fun createNotificationWithText(contentText: String): Notification {
+        val notificationIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, notificationIntent, pendingIntentFlags
+        )
+        
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Nterrupt Monitoring")
+            .setContentText(contentText)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setDefaults(0)
+            .setSound(null)
+            .setVibrate(null)
+            .setLights(0, 0, 0)
+        
+        return builder.build()
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
+        stopForegroundAppMonitoring()
         stopForeground(true)
     }
 }

@@ -9,6 +9,7 @@ import '../services/simple_usage_monitor.dart';
 import '../providers/app_list_provider.dart';
 import '../widgets/app_list_item.dart';
 import '../widgets/permission_request_dialog.dart';
+import '../screens/app_blocker_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -210,6 +211,18 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.deepPurple[600],
         elevation: 0,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.block, color: Colors.white),
+            tooltip: 'App Blocker',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AppBlockerScreen(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: _refreshApps,

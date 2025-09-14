@@ -48,4 +48,36 @@ class ForegroundService {
   static void updateState(bool running) {
     _isRunning = running;
   }
+  
+  /// Blocks an app for a specified duration
+  static Future<void> blockApp({
+    required String appName,
+    required String packageName,
+    required Duration duration,
+  }) async {
+    try {
+      await _channel.invokeMethod('blockApp', {
+        'appName': appName,
+        'packageName': packageName,
+        'durationMs': duration.inMilliseconds,
+      });
+      print('Blocked $appName for ${duration.inMinutes} minutes');
+    } catch (e) {
+      print('Error blocking app: $e');
+      rethrow;
+    }
+  }
+  
+  /// Unblocks an app
+  static Future<void> unblockApp(String packageName) async {
+    try {
+      await _channel.invokeMethod('unblockApp', {
+        'packageName': packageName,
+      });
+      print('Unblocked app: $packageName');
+    } catch (e) {
+      print('Error unblocking app: $e');
+      rethrow;
+    }
+  }
 }
