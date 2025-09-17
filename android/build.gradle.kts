@@ -19,6 +19,23 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Ensure all Android modules (including transitive plugins like usage_stats)
+// use a modern compileSdk to avoid AAPT errors such as android:attr/lStar not found.
+subprojects {
+    plugins.withId("com.android.library") {
+        // Library modules
+        extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
+            compileSdk = 36
+        }
+    }
+    plugins.withId("com.android.application") {
+        // Application modules
+        extensions.configure<com.android.build.api.dsl.ApplicationExtension>("android") {
+            compileSdk = 36
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
