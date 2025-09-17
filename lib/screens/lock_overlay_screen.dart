@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../services/overlay_service.dart';
+import '../services/flutter_overlay_service.dart';
 
 /// Lock overlay screen that blocks app access with countdown timer
 class LockOverlayScreen extends StatefulWidget {
@@ -70,28 +70,43 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
     // Start pulse animation
     _pulseController.repeat(reverse: true);
   }
-  
+
   void _startCountdown() {
+    // Store countdown in seconds as requested
     _remainingSeconds = widget.breakDurationMinutes * 60;
-    
+
+    print('Starting countdown with $_remainingSeconds seconds');
+
+    // Use Timer.periodic that decreases every 1 second as requested
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_remainingSeconds > 0) {
         setState(() {
           _remainingSeconds--;
         });
+        print('Countdown: $_remainingSeconds seconds remaining');
       } else {
+        print('Countdown reached 0, ending timer');
         _endCountdown();
       }
     });
   }
-  
+
   void _endCountdown() {
     _countdownTimer.cancel();
     
+    // Ensure we show 00:00 before closing
+    setState(() {
+      _remainingSeconds = 0;
+    });
+    
+    print('Countdown ended, showing 00:00 and closing overlay');
+    
     // Close overlay and allow app access
-    OverlayService.hideLockOverlay();
+    FlutterOverlayService.hideLockOverlay();
   }
   
+  /// Convert seconds into mm:ss format as requested
+  /// Examples: 600 → "10:00", 307 → "05:07", 9 → "00:09"
   String _formatTime(int seconds) {
     final minutes = seconds ~/ 60;
     final remainingSeconds = seconds % 60;
@@ -113,7 +128,7 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -168,9 +183,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                           );
                         },
                       ),
-                      
+
                       const SizedBox(height: 40),
-                      
+
                       // App name
                       Text(
                         '${widget.appName} is Blocked',
@@ -181,9 +196,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                         ),
                         textAlign: TextAlign.center,
                       ),
-                      
+
                       const SizedBox(height: 20),
-                      
+
                       // Break message
                       const Text(
                         'Take a break from this app',
@@ -193,9 +208,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                         ),
                         textAlign: TextAlign.center,
                       ),
-                      
+
                       const SizedBox(height: 40),
-                      
+
                       // Countdown timer
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -231,9 +246,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                           ],
                         ),
                       ),
-                      
+
                       const SizedBox(height: 40),
-                      
+
                       // Motivational message
                       Container(
                         padding: const EdgeInsets.all(20),
@@ -254,9 +269,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                           textAlign: TextAlign.center,
                         ),
                       ),
-                      
+
                       const SizedBox(height: 60),
-                      
+
                       // Bottom message
                       const Text(
                         'This screen cannot be dismissed until the break is complete',

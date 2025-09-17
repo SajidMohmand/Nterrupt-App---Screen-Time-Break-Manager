@@ -21,6 +21,8 @@ class MainActivity : FlutterActivity() {
     private val USAGE_TRACKER_CHANNEL = "nterrupt/usage_tracker"
     private val FOREGROUND_SERVICE_CHANNEL = "nterrupt/foreground_service"
     private val OVERLAY_BLOCKING_CHANNEL = "nterrupt/overlay_blocking"
+    private val BACKGROUND_COUNTDOWN_CHANNEL = "nterrupt/background_countdown"
+    private val PERSISTENT_COUNTDOWN_CHANNEL = "nterrupt/persistent_countdown"
     
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -83,6 +85,24 @@ class MainActivity : FlutterActivity() {
                 "getInstalledApps" -> {
                     val apps = getInstalledApps()
                     result.success(apps)
+                }
+                "blockApp" -> {
+                    val appName = call.argument<String>("appName") ?: "App"
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val durationMs = convertToLong(call.argument<Any>("durationMs"))
+                    
+                    if (packageName.isNotEmpty() && durationMs > 0) {
+                        // Start the foreground service to block the app
+                        NterruptForegroundService.startService(this)
+                        
+                        // Block the app using the service
+                        NterruptForegroundService.blockApp(this, appName, packageName, durationMs)
+                        
+                        android.util.Log.d("MainActivity", "Blocked app $packageName for ${durationMs}ms via usage tracker channel")
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name and duration are required", null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -169,6 +189,155 @@ class MainActivity : FlutterActivity() {
                     val remainingMs = convertToLong(call.argument<Any>("remainingMs"))
                     // Can be used for additional logic if needed
                     result.success(null)
+                }
+                // Persistent countdown service methods
+                "startCountdown" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val appName = call.argument<String>("appName") ?: "App"
+                    val durationMs = call.argument<Long>("durationMs") ?: 0L
+                    
+                    if (packageName.isNotEmpty() && durationMs > 0) {
+                        PersistentCountdownService.startCountdown(this, packageName, appName, durationMs)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name and duration are required", null)
+                    }
+                }
+                "stopCountdown" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        PersistentCountdownService.stopCountdown(this, packageName)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "getRemainingTime" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        val remainingTime = PersistentCountdownService.getRemainingTime(packageName)
+                        result.success(remainingTime)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "isCountdownActive" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        val isActive = PersistentCountdownService.isCountdownActive(packageName)
+                        result.success(isActive)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "stopAllCountdowns" -> {
+                    // This would require implementing a method to stop all countdowns
+                    // For now, just return success
+                    result.success(true)
+                }
+                "blockApp" -> {
+                    val appName = call.argument<String>("appName") ?: "App"
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val durationMs = call.argument<Long>("durationMs") ?: 0L
+                    
+                    if (packageName.isNotEmpty() && durationMs > 0) {
+                        // Start the foreground service to block the app
+                        NterruptForegroundService.startService(this)
+                        
+                        // Block the app using the service
+                        NterruptForegroundService.blockApp(this, appName, packageName, durationMs)
+                        
+                        android.util.Log.d("MainActivity", "Blocked app $packageName for ${durationMs}ms via Flutter call")
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name and duration are required", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        
+        // Background countdown channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BACKGROUND_COUNTDOWN_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getRemainingTime" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        // Start the service to get remaining time
+                        NterruptForegroundService.getRemainingTime(this, packageName)
+                        
+                        // For immediate response, we can also check directly
+                        // The service will broadcast the result
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "isAppBlocked" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        // This would require service integration to check if app is currently blocked
+                        // For now, return false as placeholder
+                        result.success(false)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "getAllBlockedApps" -> {
+                    // This would require service integration to get all currently blocked apps
+                    // For now, return empty list as placeholder
+                    result.success(emptyList<Map<String, Any>>())
+                }
+                else -> result.notImplemented()
+            }
+        }
+        
+        // Persistent countdown channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PERSISTENT_COUNTDOWN_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startCountdown" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val appName = call.argument<String>("appName") ?: "App"
+                    val durationMs = convertToLong(call.argument<Any>("durationMs"))
+                    
+                    if (packageName.isNotEmpty() && durationMs > 0) {
+                        PersistentCountdownService.startCountdown(this, packageName, appName, durationMs)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name and duration are required", null)
+                    }
+                }
+                "stopCountdown" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        PersistentCountdownService.stopCountdown(this, packageName)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "getRemainingTime" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        val remainingTime = PersistentCountdownService.getRemainingTime(packageName)
+                        result.success(remainingTime)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "isCountdownActive" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    if (packageName.isNotEmpty()) {
+                        val isActive = PersistentCountdownService.isCountdownActive(packageName)
+                        result.success(isActive)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name is required", null)
+                    }
+                }
+                "stopAllCountdowns" -> {
+                    // This would require implementing a method to stop all countdowns
+                    // For now, just return success
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }

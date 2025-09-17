@@ -24,17 +24,70 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 class FullScreenOverlayActivity : Activity() {
     
-    private var countDownTimer: CountDownTimer? = null
     private lateinit var countdownText: TextView
     private lateinit var appNameText: TextView
     private lateinit var messageText: TextView
     private lateinit var appIconView: ImageView
-    private var expiryTimestamp: Long = 0
+    private var packageName: String = ""
+    
+    // Broadcast receiver for countdown updates from persistent service
+    private val countdownReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            android.util.Log.d("OverlayActivity", "Received broadcast: ${intent?.action}")
+            
+            when (intent?.action) {
+                PersistentCountdownService.BROADCAST_COUNTDOWN_UPDATE -> {
+                    val receivedPackageName = intent.getStringExtra("package_name") ?: ""
+                    val remainingTimeMs = intent.getLongExtra("remaining_time_ms", 0)
+                    
+                    android.util.Log.d("OverlayActivity", "Persistent countdown update for $receivedPackageName: ${remainingTimeMs}ms (our package: $packageName)")
+                    
+                    if (receivedPackageName == packageName) {
+                        updateCountdownDisplay(remainingTimeMs)
+                    } else {
+                        android.util.Log.d("OverlayActivity", "Package name mismatch, ignoring update")
+                    }
+                }
+                PersistentCountdownService.BROADCAST_COUNTDOWN_EXPIRED -> {
+                    val receivedPackageName = intent.getStringExtra("package_name") ?: ""
+                    android.util.Log.d("OverlayActivity", "Persistent countdown expired for $receivedPackageName (our package: $packageName)")
+                    
+                    if (receivedPackageName == packageName) {
+                        onBlockExpired()
+                    }
+                }
+                // Fallback to old service for backward compatibility
+                NterruptForegroundService.BROADCAST_COUNTDOWN_UPDATE -> {
+                    val receivedPackageName = intent.getStringExtra("package_name") ?: ""
+                    val remainingTimeMs = intent.getLongExtra("remaining_time_ms", 0)
+                    
+                    android.util.Log.d("OverlayActivity", "Legacy countdown update for $receivedPackageName: ${remainingTimeMs}ms (our package: $packageName)")
+                    
+                    if (receivedPackageName == packageName) {
+                        updateCountdownDisplay(remainingTimeMs)
+                    }
+                }
+                NterruptForegroundService.BROADCAST_BLOCK_EXPIRED -> {
+                    val receivedPackageName = intent.getStringExtra("package_name") ?: ""
+                    android.util.Log.d("OverlayActivity", "Legacy block expired for $receivedPackageName (our package: $packageName)")
+                    
+                    if (receivedPackageName == packageName) {
+                        onBlockExpired()
+                    }
+                }
+            }
+        }
+    }
     
     private val dismissReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.example.nterrupt.DISMISS_OVERLAY") {
-                finish()
+                val targetPackage = intent?.getStringExtra("package_name")
+                // If no specific package is targeted, or if this overlay is for the targeted package, dismiss it
+                if (targetPackage == null || targetPackage == packageName) {
+                    android.util.Log.d("OverlayActivity", "Dismissing overlay for $packageName")
+                    finish()
+                }
             }
         }
     }
@@ -103,6 +156,29 @@ class FullScreenOverlayActivity : Activity() {
             val currentTime = System.currentTimeMillis()
             return maxOf(0, expiryTimestamp - currentTime)
         }
+        
+        fun recreateOverlayIfNeeded(context: Context, packageName: String) {
+            // Check SharedPreferences first
+            val prefsRemainingTime = NterruptForegroundService.getRemainingTimeFromPrefs(context, packageName)
+            val persistentRemainingTime = PersistentCountdownService.getRemainingTime(packageName)
+            val remainingTime = maxOf(prefsRemainingTime, persistentRemainingTime)
+            
+            if (remainingTime > 0) {
+                // Get block info from the static method
+                val blockInfo = NterruptForegroundService.getBlockInfoStatic(packageName)
+                if (blockInfo != null) {
+                    android.util.Log.d("OverlayActivity", "Recreating overlay for $packageName with ${remainingTime}ms remaining")
+                    showOverlayWithExpiry(context, blockInfo.appName, packageName, System.currentTimeMillis() + remainingTime)
+                } else {
+                    // Fallback: use package name as app name
+                    val appName = packageName.split('.').lastOrNull() ?: packageName
+                    android.util.Log.d("OverlayActivity", "Recreating overlay for $packageName with ${remainingTime}ms remaining (fallback)")
+                    showOverlayWithExpiry(context, appName, packageName, System.currentTimeMillis() + remainingTime)
+                }
+            } else {
+                android.util.Log.d("OverlayActivity", "No remaining time found for $packageName, not recreating overlay")
+            }
+        }
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,25 +196,45 @@ class FullScreenOverlayActivity : Activity() {
         
         // Get intent data
         val appName = intent.getStringExtra(EXTRA_APP_NAME) ?: "App"
-        val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
-        expiryTimestamp = intent.getLongExtra(EXTRA_EXPIRY_TIMESTAMP, System.currentTimeMillis() + 600000) // Default 10 minutes from now
+        packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
         
-        // Calculate remaining time based on expiry timestamp
-        val currentTime = System.currentTimeMillis()
-        val remainingMs = maxOf(0, expiryTimestamp - currentTime)
+        // Register broadcast receivers for both persistent and legacy services
+        val countdownFilter = IntentFilter().apply {
+            addAction(PersistentCountdownService.BROADCAST_COUNTDOWN_UPDATE)
+            addAction(PersistentCountdownService.BROADCAST_COUNTDOWN_EXPIRED)
+            addAction(NterruptForegroundService.BROADCAST_COUNTDOWN_UPDATE)
+            addAction(NterruptForegroundService.BROADCAST_BLOCK_EXPIRED)
+        }
+        registerReceiver(countdownReceiver, countdownFilter)
         
-        if (remainingMs <= 0) {
-            // Time already expired, close overlay
-            clearOverlayStateForPackage(packageName)
-            finish()
-            return
+        // Setup content with loading state initially
+        setupContent(appName, packageName, 0)
+        
+        // Subscribe to countdown updates from service (this will trigger immediate update)
+        NterruptForegroundService.subscribeToCountdown(this, packageName)
+        
+        android.util.Log.d("OverlayActivity", "Overlay created for package: $packageName")
+        
+        // Get initial countdown time from SharedPreferences
+        val initialRemainingTime = NterruptForegroundService.getRemainingTimeFromPrefs(this, packageName)
+        if (initialRemainingTime > 0) {
+            android.util.Log.d("OverlayActivity", "Initial remaining time from SharedPreferences: ${initialRemainingTime}ms")
+            updateCountdownDisplay(initialRemainingTime)
+        } else {
+            android.util.Log.d("OverlayActivity", "No remaining time in SharedPreferences, checking persistent service")
+            // Fallback to persistent service
+            val persistentRemainingTime = PersistentCountdownService.getRemainingTime(packageName)
+            if (persistentRemainingTime > 0) {
+                android.util.Log.d("OverlayActivity", "Found remaining time from persistent service: ${persistentRemainingTime}ms")
+                updateCountdownDisplay(persistentRemainingTime)
+            } else {
+                android.util.Log.d("OverlayActivity", "No remaining time found, finishing activity")
+                finish()
+                return
+            }
         }
         
-        // Setup content
-        setupContent(appName, packageName, remainingMs)
-        
-        // Start countdown with remaining time
-        startCountdown(remainingMs)
+        // Initial check - service will send updates via broadcast
         
         // Ensure we stay on top
         try {
@@ -310,69 +406,47 @@ class FullScreenOverlayActivity : Activity() {
         }
     }
     
-    private fun startCountdown(initialRemainingMs: Long) {
-        countDownTimer?.cancel()
+    private fun updateCountdownDisplay(remainingTimeMs: Long) {
+        val minutes = (remainingTimeMs / 1000) / 60
+        val seconds = (remainingTimeMs / 1000) % 60
+        val formattedTime = String.format("%02d:%02d", minutes, seconds)
         
-        // Use a repeating timer that recalculates remaining time based on expiry timestamp
-        countDownTimer = object : CountDownTimer(initialRemainingMs + 1000, 1000) {
-            override fun onTick(millisUntilFinished: Long) {
-                // Recalculate remaining time based on expiry timestamp (not countdown)
-                val currentTime = System.currentTimeMillis()
-                val actualRemainingMs = maxOf(0, expiryTimestamp - currentTime)
-                
-                if (actualRemainingMs <= 0) {
-                    // Time has expired
-                    onFinish()
-                    return
-                }
-                
-                val minutes = (actualRemainingMs / 1000) / 60
-                val seconds = (actualRemainingMs / 1000) % 60
-                countdownText.text = String.format("%02d:%02d", minutes, seconds)
-                
-                // Update message based on time remaining
-                when {
-                    actualRemainingMs > 300000 -> { // > 5 minutes
-                        messageText.text = "This app will be available again in:"
-                    }
-                    actualRemainingMs > 60000 -> { // > 1 minute
-                        messageText.text = "Almost there! Just a little longer..."
-                    }
-                    actualRemainingMs > 10000 -> { // > 10 seconds
-                        messageText.text = "Getting ready to unlock..."
-                    }
-                    else -> {
-                        messageText.text = "Unlocking now..."
-                    }
-                }
-                
-                // Notify service that we're still active
-                notifyServiceCountdown(actualRemainingMs)
-            }
-            
-            override fun onFinish() {
-                // Countdown finished, clear state and close overlay
-                val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
-                if (packageName.isNotEmpty()) {
-                    clearOverlayStateForPackage(packageName)
-                }
-                finish()
-            }
+        android.util.Log.d("OverlayActivity", "Updating countdown display: $formattedTime (${remainingTimeMs}ms)")
+        
+        if (remainingTimeMs <= 0) {
+            android.util.Log.d("OverlayActivity", "Time expired, closing overlay")
+            onBlockExpired()
+            return
         }
         
-        countDownTimer?.start()
+        countdownText.text = formattedTime
+        
+        // Update message based on time remaining
+        when {
+            remainingTimeMs > 300000 -> { // > 5 minutes
+                messageText.text = "This app will be available again in:"
+            }
+            remainingTimeMs > 60000 -> { // > 1 minute
+                messageText.text = "Almost there! Just a little longer..."
+            }
+            remainingTimeMs > 10000 -> { // > 10 seconds
+                messageText.text = "Getting ready to unlock..."
+            }
+            else -> {
+                messageText.text = "Unlocking now..."
+            }
+        }
     }
     
-    private fun notifyServiceCountdown(remainingMs: Long) {
-        try {
-            val intent = Intent(this, NterruptForegroundService::class.java)
-            intent.action = "UPDATE_COUNTDOWN"
-            intent.putExtra("remaining_ms", remainingMs)
-            startService(intent)
-        } catch (e: Exception) {
-            // Service might not be running, ignore
+    private fun onBlockExpired() {
+        // Block has expired, clean up and close
+        if (packageName.isNotEmpty()) {
+            clearOverlayStateForPackage(packageName)
         }
+        finish()
     }
+    
+    // No longer needed - service manages countdown independently
     
     // Prevent all bypass methods
     override fun onBackPressed() {
@@ -395,11 +469,12 @@ class FullScreenOverlayActivity : Activity() {
         // If user tries to switch away, immediately bring overlay back to front
         if (!isFinishing) {
             try {
-            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            activityManager.moveTaskToFront(taskId, ActivityManager.MOVE_TASK_WITH_HOME)
-        } catch (e: Exception) {
-            // Ignore if we can't move to front
-        }
+                val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                activityManager.moveTaskToFront(taskId, ActivityManager.MOVE_TASK_WITH_HOME)
+                android.util.Log.d("OverlayActivity", "Brought overlay back to front on pause")
+            } catch (e: Exception) {
+                android.util.Log.e("OverlayActivity", "Error bringing overlay to front on pause", e)
+            }
         }
     }
     
@@ -431,11 +506,40 @@ class FullScreenOverlayActivity : Activity() {
         super.onResume()
         // Reapply fullscreen mode in case it was lost
         setupFullScreenMode()
+        
+        // Check if countdown is still active and update display
+        if (packageName.isNotEmpty()) {
+            // First check SharedPreferences
+            val prefsRemainingTime = NterruptForegroundService.getRemainingTimeFromPrefs(this, packageName)
+            if (prefsRemainingTime > 0) {
+                updateCountdownDisplay(prefsRemainingTime)
+                android.util.Log.d("OverlayActivity", "Resumed with remaining time from SharedPreferences: ${prefsRemainingTime}ms")
+            } else {
+                // Fallback to persistent service
+                val persistentRemainingTime = PersistentCountdownService.getRemainingTime(packageName)
+                if (persistentRemainingTime > 0) {
+                    android.util.Log.d("OverlayActivity", "Found remaining time from persistent service: ${persistentRemainingTime}ms")
+                    updateCountdownDisplay(persistentRemainingTime)
+                } else {
+                    // Final fallback to service
+                    val serviceRemainingTime = NterruptForegroundService.getRemainingBlockTime(packageName)
+                    if (serviceRemainingTime > 0) {
+                        android.util.Log.d("OverlayActivity", "Service has remaining time: ${serviceRemainingTime}ms, updating display")
+                        updateCountdownDisplay(serviceRemainingTime)
+                    } else {
+                        android.util.Log.d("OverlayActivity", "No remaining time found anywhere, finishing activity")
+                        finish()
+                        return
+                    }
+                }
+            }
+        }
+        
         try {
             val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             activityManager.moveTaskToFront(taskId, ActivityManager.MOVE_TASK_WITH_HOME)
         } catch (e: Exception) {
-            // Ignore if we can't move to front
+            android.util.Log.e("OverlayActivity", "Error bringing overlay to front on resume", e)
         }
     }
     
@@ -467,11 +571,28 @@ class FullScreenOverlayActivity : Activity() {
     
     override fun onDestroy() {
         super.onDestroy()
-        countDownTimer?.cancel()
+        
+        // Only unsubscribe if the countdown has actually expired
+        if (packageName.isNotEmpty()) {
+            // Check SharedPreferences first
+            val prefsRemainingTime = NterruptForegroundService.getRemainingTimeFromPrefs(this, packageName)
+            val persistentRemainingTime = PersistentCountdownService.getRemainingTime(packageName)
+            val remainingTime = maxOf(prefsRemainingTime, persistentRemainingTime)
+            
+            if (remainingTime <= 0) {
+                NterruptForegroundService.unsubscribeFromCountdown(this, packageName)
+                android.util.Log.d("OverlayActivity", "Countdown expired, unsubscribing from updates")
+            } else {
+                android.util.Log.d("OverlayActivity", "Countdown still active ($remainingTime ms), keeping subscription")
+            }
+        }
+        
+        // Unregister receivers
         try {
             unregisterReceiver(dismissReceiver)
+            unregisterReceiver(countdownReceiver)
         } catch (e: Exception) {
-            // Receiver might not be registered
+            // Receivers might not be registered
         }
     }
 }

@@ -11,6 +11,8 @@ import '../widgets/app_list_item.dart';
 import '../widgets/permission_request_dialog.dart';
 import '../screens/app_blocker_screen.dart';
 import '../examples/persistent_overlay_test.dart';
+import '../examples/persistent_countdown_test.dart';
+import '../examples/sharedprefs_countdown_test.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -365,7 +367,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      floatingActionButton: PersistentOverlayTest.addTestButton(context),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          SharedPrefsCountdownTestButton.addTestButton(context),
+          const SizedBox(height: 10),
+          PersistentCountdownTestButton.addTestButton(context),
+          const SizedBox(height: 10),
+          PersistentOverlayTest.addTestButton(context),
+        ],
+      ),
     );
   }
 }

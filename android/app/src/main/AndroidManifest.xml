@@ -67,6 +67,25 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Persistent Countdown Service for reliable countdown timing -->
+        <service
+            android:name=".PersistentCountdownService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Countdown Update Receiver -->
+        <receiver
+            android:name=".CountdownUpdateReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Countdown Expired Receiver -->
+        <receiver
+            android:name=".CountdownExpiredReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <!-- Background Service (enabled but controlled by app) -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"

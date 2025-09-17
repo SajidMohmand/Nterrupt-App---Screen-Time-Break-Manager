@@ -4,6 +4,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'screen/home_screen.dart';
 import 'providers/app_list_provider.dart';
 import './services/dummy_service.dart';
+import './services/flutter_overlay_service.dart';
 
 
 void main() async {
@@ -63,6 +64,7 @@ class MyApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Nterrupt',
         debugShowCheckedModeBanner: false,
+        navigatorKey: NavigationService.navigatorKey,
         theme: ThemeData(
           primarySwatch: Colors.deepPurple,
           primaryColor: Colors.deepPurple[600],

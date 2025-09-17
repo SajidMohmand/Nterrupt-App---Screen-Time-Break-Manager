@@ -5,6 +5,7 @@ import 'preferences_service.dart';
 import 'overlay_blocking_service.dart';
 import 'app_discovery_service.dart';
 import 'foreground_service.dart';
+import 'persistent_countdown_service.dart';
 
 /// Simplified usage monitor that works without background service
 class SimpleUsageMonitor {
@@ -201,15 +202,21 @@ class SimpleUsageMonitor {
         return;
       }
       
-      // Show full-screen blocking overlay
-      final remainingDuration = Duration(minutes: remainingMinutes);
-      await OverlayBlockingService.showOverlay(
-        appName: app.appName,
-        packageName: packageName,
-        duration: remainingDuration,
-      );
+      // Don't create overlay from Flutter side - let native service handle it
+      // The native service will create the overlay when it detects the app is in cooldown
+      print('App $packageName is in cooldown (${remainingMinutes} minutes remaining) - native service will handle overlay');
       
-      print('Showing full-screen blocking overlay for $packageName (${remainingMinutes} minutes remaining)');
+      // Trigger the native service to start blocking this app
+      try {
+        await _channel.invokeMethod('blockApp', {
+          'appName': app.appName,
+          'packageName': packageName,
+          'durationMs': remainingMinutes * 60 * 1000, // Convert to milliseconds
+        });
+        print('Triggered native service to block $packageName for $remainingMinutes minutes');
+      } catch (e) {
+        print('Error triggering native service: $e');
+      }
       
     } catch (e) {
       print('Error showing cooldown overlay: $e');
@@ -217,7 +224,7 @@ class SimpleUsageMonitor {
     }
   }
 
-  /// Starts cooldown for an app
+  /// Starts cooldown for an app using persistent countdown service
   static Future<void> _startCooldown(String packageName) async {
     try {
       print('Starting cooldown for $packageName');
@@ -237,26 +244,33 @@ class SimpleUsageMonitor {
         orElse: () => AppInfo(packageName: packageName, appName: packageName),
       );
       
-      // Show full-screen blocking overlay immediately
+      // Start persistent countdown service for reliable timing
       try {
-        // Check if overlay permission is granted first
-        final hasPermission = await OverlayBlockingService.hasOverlayPermission();
-        if (!hasPermission) {
-          print('Overlay permission not granted, requesting permission');
-          await OverlayBlockingService.requestOverlayPermission();
-        }
-        
-        // Show the full-screen blocking overlay
-        await OverlayBlockingService.showOverlay(
-          appName: app.appName,
+        await PersistentCountdownService.startCountdown(
           packageName: packageName,
+          appName: app.appName,
           duration: const Duration(minutes: _breakDurationMinutes),
         );
-        
-        print('Full-screen blocking overlay shown for $packageName');
-      } catch (overlayError) {
-        print('Error showing full-screen overlay for $packageName: $overlayError');
-        // Continue without overlay but keep cooldown active
+        print('Persistent countdown started for $packageName');
+      } catch (countdownError) {
+        print('Error starting persistent countdown for $packageName: $countdownError');
+        // Continue with fallback
+      }
+      
+      // Don't create overlay from Flutter side - let native service handle it
+      // The native service will create the overlay when it detects the app is in cooldown
+      print('App $packageName blocked for $_breakDurationMinutes minutes - native service will handle overlay');
+      
+      // Trigger the native service to start blocking this app
+      try {
+        await _channel.invokeMethod('blockApp', {
+          'appName': app.appName,
+          'packageName': packageName,
+          'durationMs': _breakDurationMinutes * 60 * 1000, // Convert to milliseconds
+        });
+        print('Triggered native service to block $packageName');
+      } catch (e) {
+        print('Error triggering native service: $e');
       }
       
       print('App $packageName blocked for $_breakDurationMinutes minutes');
@@ -287,10 +301,18 @@ class SimpleUsageMonitor {
   static bool get isMonitoring => _isMonitoring;
   
   /// Resets usage for a specific app
-  static void resetUsage(String packageName) {
+  static Future<void> resetUsage(String packageName) async {
     _dailyUsageTimes[packageName] = 0;
     _lastResetTime[packageName] = DateTime.now();
     _cooldownEndTimes.remove(packageName);
+    
+    // Stop persistent countdown for this app
+    try {
+      await PersistentCountdownService.stopCountdown(packageName);
+      print('Stopped persistent countdown for $packageName');
+    } catch (e) {
+      print('Error stopping persistent countdown for $packageName: $e');
+    }
   }
 }
 
