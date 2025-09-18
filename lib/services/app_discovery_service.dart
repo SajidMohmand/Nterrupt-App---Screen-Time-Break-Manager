@@ -12,13 +12,12 @@ class AppDiscoveryService {
   /// Fetches all installed apps on the device
   static Future<List<AppInfo>> getInstalledApps() async {
     try {
-      // Use installed_apps package instead of device_apps
-      final List<AppInfo> installedApps = await _getAppsWithInstalledApps();
+      // Use platform channel method to get all launchable apps
+      final List<AppInfo> installedApps = await _getInstalledAppsFromPlatform();
 
-      // Filter out system apps and excluded apps
+      // Only filter out excluded apps, but keep system apps that are launchable
       List<AppInfo> appList = installedApps
-          .where((app) =>
-      !_isSystemApp(app.appName) && !_shouldExcludeApp(app.packageName))
+          .where((app) => !_shouldExcludeApp(app.packageName))
           .toList();
 
       // Sort by app name for better UX
@@ -27,8 +26,8 @@ class AppDiscoveryService {
       return appList;
     } catch (e) {
       print('Error getting installed apps: $e');
-      // Fallback to platform channel method
-      return await _getInstalledAppsFromPlatform();
+      // Fallback to installed_apps package method
+      return await _getAppsWithInstalledApps();
     }
   }
 
@@ -46,7 +45,7 @@ class AppDiscoveryService {
         packageName: app.packageName,
         appName: app.name,
         iconPath: null, // installed_apps doesn't provide icon path
-        isSystemApp: _isSystemApp(app.name),
+        isSystemApp: false, // We'll let the platform method handle system app detection
       )));
 
       return apps;
@@ -56,7 +55,7 @@ class AppDiscoveryService {
     }
   }
 
-  /// Fallback method using platform channel
+  /// Primary method using platform channel
   static Future<List<AppInfo>> _getInstalledAppsFromPlatform() async {
     try {
       final List<dynamic> apps =
@@ -67,12 +66,11 @@ class AppDiscoveryService {
         return AppInfo(
           packageName: app['packageName'],
           appName: app['appName'],
-          iconPath: app['iconPath'],
+          iconPath: app['iconBase64'], // Now using base64 icon data
           isSystemApp: app['isSystemApp'] ?? false,
         );
       })
-          .where((app) => !_shouldExcludeApp(app.packageName))
-          .toList();
+          .toList(); // Don't filter here, let the main method handle filtering
     } catch (e) {
       print('Error getting apps from platform: $e');
       return [];
@@ -82,12 +80,9 @@ class AppDiscoveryService {
   /// Checks if an app should be excluded from monitoring
   static bool _shouldExcludeApp(String packageName) {
     const excludedApps = [
-      'android',
-      'com.android.systemui',
-      'com.android.settings',
-      'com.google.android.gms',
-      'com.android.providers',
       'com.example.nterrupt', // Our own app
+      'com.android.systemui',
+      'com.android.providers',
       'com.android.launcher',
       'com.android.launcher3',
       'com.google.android.launcher',
@@ -105,31 +100,6 @@ class AppDiscoveryService {
     return excludedApps.any((excluded) => packageName.contains(excluded));
   }
 
-  /// Checks if an app is a system app based on its name
-  static bool _isSystemApp(String appName) {
-    const systemAppNames = [
-      'System',
-      'Android System',
-      'Settings',
-      'Phone',
-      'Messages',
-      'Camera',
-      'Gallery',
-      'File Manager',
-      'Downloads',
-      'Calculator',
-      'Clock',
-      'Calendar',
-      'Contacts',
-      'Email',
-      'Browser',
-      'Chrome',
-      'Firefox',
-      'Safari',
-    ];
-
-    return systemAppNames.any((name) => appName.contains(name));
-  }
 
   /// Gets app icon as bytes (for caching)
   static Future<Uint8List?> getAppIcon(String packageName) async {

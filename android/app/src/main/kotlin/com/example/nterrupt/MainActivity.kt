@@ -367,26 +367,61 @@ class MainActivity : FlutterActivity() {
 
     private fun getInstalledApps(): List<Map<String, Any>> {
         val pm = packageManager
-        val installedPackages = pm.getInstalledPackages(PackageManager.GET_META_DATA)
+        val installedPackages = pm.getInstalledPackages(PackageManager.GET_META_DATA or PackageManager.GET_PERMISSIONS)
         val apps = mutableListOf<Map<String, Any>>()
 
         for (packageInfo in installedPackages) {
             val appInfo = packageInfo.applicationInfo
             if (appInfo != null) {
-                val appName = appInfo.loadLabel(pm).toString()
-                val packageName = packageInfo.packageName
-                val isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                // Check if the app has a launch intent (is launchable)
+                val launchIntent = pm.getLaunchIntentForPackage(packageInfo.packageName)
+                if (launchIntent != null) {
+                    val appName = appInfo.loadLabel(pm).toString()
+                    val packageName = packageInfo.packageName
+                    
+                    // Check if it's a system app (but still include it if it's launchable)
+                    val isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                    
+                    // Get app icon as base64 string
+                    val icon = appInfo.loadIcon(pm)
+                    val iconBase64 = iconToBase64(icon)
 
-                apps.add(
-                    mapOf(
-                        "packageName" to packageName,
-                        "appName" to appName,
-                        "isSystemApp" to isSystemApp
+                    apps.add(
+                        mapOf(
+                            "packageName" to packageName,
+                            "appName" to appName,
+                            "isSystemApp" to isSystemApp,
+                            "iconBase64" to iconBase64
+                        )
                     )
-                )
+                }
             }
         }
         return apps
+    }
+    
+    private fun iconToBase64(icon: android.graphics.drawable.Drawable): String {
+        return try {
+            val bitmap = when (icon) {
+                is android.graphics.drawable.BitmapDrawable -> icon.bitmap
+                else -> {
+                    val bitmap = android.graphics.Bitmap.createBitmap(
+                        icon.intrinsicWidth, icon.intrinsicHeight, android.graphics.Bitmap.Config.ARGB_8888
+                    )
+                    val canvas = android.graphics.Canvas(bitmap)
+                    icon.setBounds(0, 0, canvas.width, canvas.height)
+                    icon.draw(canvas)
+                    bitmap
+                }
+            }
+            
+            val outputStream = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, outputStream)
+            val byteArray = outputStream.toByteArray()
+            android.util.Base64.encodeToString(byteArray, android.util.Base64.DEFAULT)
+        } catch (e: Exception) {
+            "" // Return empty string if icon conversion fails
+        }
     }
 
     private fun isAppRunning(packageName: String?): Boolean {

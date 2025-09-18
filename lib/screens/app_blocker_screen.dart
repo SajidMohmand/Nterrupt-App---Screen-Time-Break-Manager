@@ -27,11 +27,10 @@ class _AppBlockerScreenState extends State<AppBlockerScreen> {
   Future<void> _loadApps() async {
     try {
       final apps = await AppDiscoveryService.getInstalledApps();
-      // Filter out system apps for better UX
-      final userApps = apps.where((app) => !app.isSystemApp).toList();
+      // Include all launchable apps (both user and system apps)
       
       setState(() {
-        _apps = userApps;
+        _apps = apps;
         _isLoading = false;
       });
     } catch (e) {

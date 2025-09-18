@@ -214,18 +214,18 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.deepPurple[600],
         elevation: 0,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.block, color: Colors.white),
-            tooltip: 'App Blocker',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AppBlockerScreen(),
-                ),
-              );
-            },
-          ),
+          // IconButton(
+          //   icon: const Icon(Icons.block, color: Colors.white),
+          //   tooltip: 'App Blocker',
+          //   onPressed: () {
+          //     Navigator.push(
+          //       context,
+          //       MaterialPageRoute(
+          //         builder: (context) => const AppBlockerScreen(),
+          //       ),
+          //     );
+          //   },
+          // ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: _refreshApps,
@@ -367,16 +367,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          SharedPrefsCountdownTestButton.addTestButton(context),
-          const SizedBox(height: 10),
-          PersistentCountdownTestButton.addTestButton(context),
-          const SizedBox(height: 10),
-          PersistentOverlayTest.addTestButton(context),
-        ],
-      ),
+      // floatingActionButton: Column(
+      //   mainAxisAlignment: MainAxisAlignment.end,
+      //   children: [
+      //     SharedPrefsCountdownTestButton.addTestButton(context),
+      //     const SizedBox(height: 10),
+      //     PersistentCountdownTestButton.addTestButton(context),
+      //     const SizedBox(height: 10),
+      //     PersistentOverlayTest.addTestButton(context),
+      //   ],
+      // ),
     );
   }
 }
