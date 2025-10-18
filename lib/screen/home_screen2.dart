@@ -141,7 +141,6 @@ class _HomeScreenTwoState extends State<HomeScreenTwo>
       playSound: true,
       enableVibration: true,
       showBadge: true,
-      sound: RawResourceAndroidNotificationSound(''), // default sound
     );
 
     final androidPlugin = _notifications
@@ -498,8 +497,10 @@ class _HomeScreenTwoState extends State<HomeScreenTwo>
       remaining = cycle - mod;
     }
 
-    // Detect red -> green transition while app is backgrounded
-    if (_appInBackground && _previousPhase == _TrafficPhase.red && newPhase == _TrafficPhase.green) {
+    // Detect red -> green transition while app is backgrounded AND user is stopped near light
+    final bool isStopped = (_currentLocation?.speed ?? 0) < 0.5; // ~ stationary
+    if (_appInBackground && _nearSampleLight && isStopped &&
+        _previousPhase == _TrafficPhase.red && newPhase == _TrafficPhase.green) {
       _notifyGreenLight();
     }
 
@@ -516,6 +517,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo>
     try {
       bool hasPermission = await SystemAlertWindow.checkPermissions() ?? false;
       if (!hasPermission) {
+        // Request without blocking UX; user can grant in settings
         await SystemAlertWindow.requestPermissions();
         hasPermission = await SystemAlertWindow.checkPermissions() ?? false;
       }
@@ -568,6 +570,28 @@ class _HomeScreenTwoState extends State<HomeScreenTwo>
                   ),
                 ],
               ),
+          ],
+          padding: SystemWindowPadding.setSymmetricPadding(12, 12),
+          decoration: const SystemWindowDecoration(startColor: Colors.white),
+        ),
+        footer: SystemWindowFooter(
+          buttons: [
+            SystemWindowButton(
+              text: SystemWindowText(text: 'Open', fontSize: 12, textColor: Colors.white),
+              tag: 'open_app',
+              width: 80,
+              height: 32,
+              padding: SystemWindowPadding(left: 8, right: 8, top: 6, bottom: 6),
+              decoration: SystemWindowDecoration(startColor: Colors.deepPurple),
+            ),
+            SystemWindowButton(
+              text: SystemWindowText(text: 'Close', fontSize: 12, textColor: Colors.white),
+              tag: 'close_overlay',
+              width: 80,
+              height: 32,
+              padding: SystemWindowPadding(left: 8, right: 8, top: 6, bottom: 6),
+              decoration: const SystemWindowDecoration(startColor: Colors.grey),
+            ),
           ],
           padding: SystemWindowPadding.setSymmetricPadding(12, 12),
           decoration: const SystemWindowDecoration(startColor: Colors.white),
