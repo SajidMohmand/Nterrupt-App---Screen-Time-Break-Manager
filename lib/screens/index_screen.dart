@@ -204,9 +204,9 @@ class _IndexScreenState extends State<IndexScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
                       SizedBox(
-                        height: 280,
+                        height: 260,
                         child: Row(
                           children: [
                             // Pie Chart - Filled
