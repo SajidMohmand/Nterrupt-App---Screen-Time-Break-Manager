@@ -68,7 +68,7 @@ class _HomeMainScreenState extends State<HomeMainScreen>
         automaticallyImplyLeading: false,
         toolbarHeight: 0, // Hide default toolbar
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(215),
+          preferredSize: const Size.fromHeight(250),
           child: Column(
             children: [
               // Location Section
